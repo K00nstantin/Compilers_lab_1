@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -131,5 +132,120 @@ func (p *parser) parsePrim() (*reNode, error) {
 			}
 		}
 		return &reNode{kind: 'l', ch: r}, nil
+	}
+}
+
+func collectAlphabet(n *reNode, set map[rune]struct{}) {
+	if n == nil {
+		return
+	}
+	switch n.kind {
+	case 'l':
+		if n.ch != 0 {
+			set[n.ch] = struct{}{}
+		}
+	default:
+		collectAlphabet(n.a, set)
+		collectAlphabet(n.b, set)
+	}
+}
+
+func stateSetKey(states []int) string {
+	var b strings.Builder
+	for i, s := range states {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%d", s)
+	}
+	return b.String()
+}
+
+func setUnion(a, b map[int]struct{}) map[int]struct{} {
+	out := make(map[int]struct{}, len(a)+len(b))
+	for k := range a {
+		out[k] = struct{}{}
+	}
+	for k := range b {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func setToSortedSlice(s map[int]struct{}) []int {
+	out := make([]int, 0, len(s))
+	for v := range s {
+		out = append(out, v)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func addFollow(follow map[int]map[int]struct{}, from int, toSet map[int]struct{}) {
+	if _, ok := follow[from]; !ok {
+		follow[from] = make(map[int]struct{})
+	}
+	for to := range toSet {
+		follow[from][to] = struct{}{}
+	}
+}
+
+func numberPositions(n *reNode, next *int, posSym map[int]rune) {
+	if n == nil {
+		return
+	}
+	numberPositions(n.a, next, posSym)
+	numberPositions(n.b, next, posSym)
+	if n.kind == 'l' && n.ch != 0 {
+		*next++
+		n.pos = *next
+		posSym[n.pos] = n.ch
+	}
+}
+
+func computeFunctions(n *reNode, follow map[int]map[int]struct{}) {
+	if n == nil {
+		return
+	}
+	computeFunctions(n.a, follow)
+	computeFunctions(n.b, follow)
+
+	switch n.kind {
+	case 'l':
+		if n.ch == 0 {
+			n.nullable = true
+			n.firstpos = map[int]struct{}{}
+			n.lastpos = map[int]struct{}{}
+			return
+		}
+		n.nullable = false
+		n.firstpos = map[int]struct{}{n.pos: {}}
+		n.lastpos = map[int]struct{}{n.pos: {}}
+	case 'a':
+		n.nullable = n.a.nullable || n.b.nullable
+		n.firstpos = setUnion(n.a.firstpos, n.b.firstpos)
+		n.lastpos = setUnion(n.a.lastpos, n.b.lastpos)
+	case 'c':
+		n.nullable = n.a.nullable && n.b.nullable
+		if n.a.nullable {
+			n.firstpos = setUnion(n.a.firstpos, n.b.firstpos)
+		} else {
+			n.firstpos = setUnion(n.a.firstpos, map[int]struct{}{})
+		}
+		if n.b.nullable {
+			n.lastpos = setUnion(n.a.lastpos, n.b.lastpos)
+		} else {
+			n.lastpos = setUnion(n.b.lastpos, map[int]struct{}{})
+		}
+		for i := range n.a.lastpos {
+			addFollow(follow, i, n.b.firstpos)
+		}
+	case 's':
+		n.nullable = true
+		n.firstpos = setUnion(n.a.firstpos, map[int]struct{}{})
+		n.lastpos = setUnion(n.a.lastpos, map[int]struct{}{})
+		for i := range n.a.lastpos {
+			addFollow(follow, i, n.a.firstpos)
+		}
 	}
 }
