@@ -249,3 +249,135 @@ func computeFunctions(n *reNode, follow map[int]map[int]struct{}) {
 		}
 	}
 }
+
+func regexToDFA(ast *reNode, alphabet []rune) *DFA {
+	const endMarker rune = -1
+	root := &reNode{
+		kind: 'c',
+		a:    ast,
+		b:    &reNode{kind: 'l', ch: endMarker},
+	}
+
+	sigma := make([]rune, len(alphabet))
+	copy(sigma, alphabet)
+	sort.Slice(sigma, func(i, j int) bool { return sigma[i] < sigma[j] })
+	symIdx := make(map[rune]int, len(sigma))
+	for i, r := range sigma {
+		symIdx[r] = i
+	}
+	m := len(sigma)
+
+	posSym := make(map[int]rune)
+	nextPos := 0
+	numberPositions(root, &nextPos, posSym)
+	follow := make(map[int]map[int]struct{})
+	computeFunctions(root, follow)
+
+	markerPos := root.b.pos
+	startSet := setToSortedSlice(root.firstpos)
+	startKey := stateSetKey(startSet)
+
+	stateSets := [][]int{startSet}
+	stateMap := map[string]int{startKey: 0}
+	queue := []int{0}
+	transOut := []map[rune]int{make(map[rune]int)}
+	final := make(map[int]bool)
+
+	for len(queue) > 0 {
+		sid := queue[0]
+		queue = queue[1:]
+		S := stateSets[sid]
+
+		containsMarker := false
+		for _, p := range S {
+			if p == markerPos {
+				containsMarker = true
+				break
+			}
+		}
+		if containsMarker {
+			final[sid] = true
+		}
+
+		for _, a := range sigma {
+			Uset := make(map[int]struct{})
+			for _, p := range S {
+				if posSym[p] != a {
+					continue
+				}
+				for fp := range follow[p] {
+					Uset[fp] = struct{}{}
+				}
+			}
+			if len(Uset) == 0 {
+				continue
+			}
+			U := setToSortedSlice(Uset)
+			k := stateSetKey(U)
+			tid, ok := stateMap[k]
+			if !ok {
+				tid = len(stateSets)
+				stateMap[k] = tid
+				stateSets = append(stateSets, U)
+				transOut = append(transOut, make(map[rune]int))
+				queue = append(queue, tid)
+			}
+			transOut[sid][a] = tid
+		}
+	}
+
+	n := len(stateSets)
+	dead := -1
+	if m > 0 {
+		needDead := false
+		for s := 0; s < n; s++ {
+			for _, a := range sigma {
+				if _, ok := transOut[s][a]; !ok {
+					needDead = true
+					break
+				}
+			}
+			if needDead {
+				break
+			}
+		}
+		if needDead {
+			dead = n
+			n++
+			transOut = append(transOut, make(map[rune]int))
+			for _, a := range sigma {
+				transOut[dead][a] = dead
+			}
+			for s := 0; s < dead; s++ {
+				for _, a := range sigma {
+					if _, ok := transOut[s][a]; !ok {
+						transOut[s][a] = dead
+					}
+				}
+			}
+		}
+	}
+
+	trans := make([][]int, n)
+	for s := 0; s < n; s++ {
+		trans[s] = make([]int, m)
+		for j, a := range sigma {
+			if t, ok := transOut[s][a]; ok {
+				trans[s][j] = t
+			} else {
+				trans[s][j] = s
+			}
+		}
+	}
+	_ = dead
+
+	startDFA := 0
+	return &DFA{
+		NumStates: n,
+		Start:     startDFA,
+		Final:     final,
+		Trans:     trans,
+		Sigma:     sigma,
+		SymIdx:    symIdx,
+	}
+}
